@@ -34,7 +34,7 @@ static inline float squared_distance(size_t n, float* l, float* r) {
         float f = l[i]-r[i];
         s+=(f*f);
     }
-    return s;
+    return std::sqrt(s);
 }
 
 class Builder {
@@ -45,8 +45,8 @@ class Builder {
     std::string sorted;
 
 public:
-    Builder(int d, const std::filesystem::path &p) : d(d), p(p), sorted(p.string()+"_sorted"),
-                                                     b1(d, p.c_str(), squared_distance),
+    Builder(int d, const std::filesystem::path &p, int blockade=-1, bool doMedian=false) : d(d), p(p), sorted(p.string()+"_sorted"),
+                                                     b1(d, p.c_str(), squared_distance, blockade, doMedian),
                                                      b2(d, p.string()+"_sorted", squared_distance){
 
     }
