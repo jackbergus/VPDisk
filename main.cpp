@@ -28,22 +28,25 @@
 
 
 
-#include "include/Builder.h"
+#include "vptree/Builder.h"
 
 
 #include <regex>
 #include <string>
 #include <iostream>
 
-int main() {
+void vp_tree_example() {
     {
-        Builder b1{3, "dataset/vp.bin", -1, true};
+        Builder b1{3, "dataset/vp.bin", 3, BALANCED_ROOT_IS_HALFWAY_BLOCKADE};
         b1.write_entry_to_disk( {0,0,0});
         b1.write_entry_to_disk( {1,2,3});
         b1.write_entry_to_disk( {1.1,2.1,2.9});
         b1.write_entry_to_disk( {.9,1.9,3});
         b1.write_entry_to_disk( {3,3,3});
         b1.write_entry_to_disk( {.001,.001,.001});
+        b1.write_entry_to_disk( {.2,.2,.1});
+        b1.write_entry_to_disk( {0.2,0.2,0.2});
+        b1.write_entry_to_disk( {0.1,0,0.3});
         b1.build();
     }
 
@@ -51,7 +54,35 @@ int main() {
     b1.openSortedFile();
     b1.printSortedFile(std::cout);
     DiskVP::TopKSearch mds(&b1, 4, 2);
-   auto r = mds.run();
+    auto r = mds.run();
     unlink("dataset/vp.bin");
     unlink("dataset/vp.bin_idx");
+}
+
+#include <bktree/BKTreeDisk.h>
+
+void bktree_test() {
+    auto tree = BKTreeDisk::createNewDiskFile("test.bin", 20, 10, (size_t)distance_method::STRING_DISTANCE, 5);
+    auto fptr = [](void* ptr) {
+        std::string s{(char*)ptr};
+        return s;
+    };
+    tree->add(0, (void*)"help", 5);
+    tree->add(1, (void*)"hell", 5);
+    tree->add(2, (void*)"hello", 6);
+    tree->add(3, (void*)"loop", 5);
+    tree->add(4, (void*)"helps", 6);
+    tree->add(5, (void*)"shell", 6);
+    tree->add(6, (void*)"helper", 7);
+    tree->add(7, (void*)"troop", 6);
+    tree->add(8, (void*)"genoveffo", 10);
+    tree->add(9, (void*)"genova", 7);
+    tree->add(10, (void*)"genoa", 6);
+    tree->add(11, (void*)"genoveffa", 10);
+    tree->finalise_insertion();
+    tree->print(std::cout, fptr);
+}
+
+int main() {
+    bktree_test();
 }

@@ -2,13 +2,12 @@
 project(simmatch)
 set(FAISS_ENABLE_GPU OFF)
 set(BUILD_TESTING OFF)
-#add_subdirectory(submodules/faiss)
-#include_directories(submodules/faiss/faiss)
+add_subdirectory(submodules/stxxl)
+include_directories(submodules/stxxl/include)
+include_directories(${CMAKE_BINARY_DIR}/submodules/stxxl/include)
 set(CMAKE_CXX_STANDARD 23)
 include_directories(include)
-#
-#add_library(vptree OBJECT submodules/vptree/inc/vptree.h
-#        submodules/vptree/src/vptree_sequential.cpp)
+include_directories(submodules/math)
 
-add_executable(simmatch main.cpp src/FAISSBatch.cpp include/FAISSBatch.h include/disk_vp_node_header.h src/DiskVP.cpp include/DiskVP.h src/mmapFile.cpp include/mmapFile.h src/Builder.cpp include/Builder.h)
-target_link_libraries(simmatch  stdc++fs)
+add_executable(simmatch main.cpp src/vptree/FAISSBatch.cpp include/vptree/FAISSBatch.h include/vptree/disk_vp_node_header.h src/vptree/DiskVP.cpp include/vptree/DiskVP.h src/mmapFile.cpp include/mmapFile.h src/vptree/Builder.cpp include/vptree/Builder.h submodules/math/MortonLUT.h include/vectorhash.h src/Similarities.cpp src/bktree/BKTReeHeader.cpp include/bktree/BKTReeHeader.h include/bktree/PrimaryIndexInformation.h src/bktree/BKTreeDisk.cpp include/bktree/BKTreeDisk.h)
+target_link_libraries(simmatch stxxl stdc++fs)

@@ -34,6 +34,7 @@
 #include "disk_vp_node_header.h"
 #include <queue>
 #include <stack>
+#include <string.h>
 
 
 /**
@@ -54,12 +55,20 @@ template  <typename T>  bool definitelyLessThan(T a, T b)
 
 #include <set>
 
+enum VPTRee_Strategies {
+        BALANCED_ROOT_IS_GEOMETRIC_MEDIAN,
+        BALANCED_ROOT_IS_HALFWAY_BLOCKADE,
+        RANDOM_ROOT_UNBALANCED
+
+    };
+
 struct DiskVP {
     unsigned int d;
     std::filesystem::path vptree;
     size_t idx;
     FILE* myfile;
     std::vector<size_t> index;
+    std::vector<std::pair<size_t,float>> blockade_elements;
     unsigned long mmapfilelen, idxLen;
     mmap_file fileptr, idxPtr;
     char* file;
@@ -68,18 +77,18 @@ struct DiskVP {
     std::function<float(size_t,float*,float*)> ker;
     std::mt19937 rng;                 ///<@ random number generator
     int blockade;
-    bool doBalancedSorting;
+    VPTRee_Strategies doBalancedSorting;
     float* ptrMemory;
 
     DiskVP(unsigned int d,
            const std::filesystem::path& vptree,
            const std::function<float(size_t,float*,float*)>& ker,
            int blockade = -1,
-           bool doBalancedSorting = false) :
+           VPTRee_Strategies doBalancedSorting = RANDOM_ROOT_UNBALANCED) :
 
            file{nullptr}, d(d), start_to_write{false}, vptree(vptree), idx{0}, ker{ker}, blockade{blockade},
            doBalancedSorting{doBalancedSorting} {
-        if (doBalancedSorting) {
+        if (doBalancedSorting != RANDOM_ROOT_UNBALANCED) {
             ptrMemory = new float[d];
         } else {
             ptrMemory = nullptr;
@@ -93,10 +102,8 @@ struct DiskVP {
 
     inline void start_write_to_disk() {
         if (!start_to_write) {
-//            std::ios_base::sync_with_stdio(false);
             myfile = fopen(vptree.c_str(), "w");
             fwrite(&d, sizeof(float), 1, myfile);
-//            myfile.write((char*)(&d), sizeof(float));
             start_to_write = true;
         }
 
@@ -148,13 +155,6 @@ struct DiskVP {
 
     inline void write_entry_to_disk(disk_vp_node_header *to_dist, float *ptr) {
         start_write_to_disk();
-//        constexpr auto maxx = std::numeric_limits<unsigned int>::max();
-//        disk_vp_node_header to_disk;
-//        to_disk.id = to_dist->id;
-//        to_disk.radius = to_dist->radius;
-//        to_disk.leftChild = to_dist->leftChild == maxx ? maxx :  index[to_dist->leftChild];
-//        to_disk.rightChild = to_dist->rightChild == maxx ? maxx : index[to_dist->rightChild];
-//        to_disk.isLeaf = to_dist->isLeaf;
         fwrite(to_dist, sizeof(disk_vp_node_header), 1, myfile);
         fwrite(ptr, sizeof(float), d, myfile);
         fflush(myfile);
@@ -171,10 +171,64 @@ struct DiskVP {
         to_disk.isLeaf = false;
         fwrite(&to_disk, sizeof(disk_vp_node_header), 1, myfile);
         fwrite(entry.data(), sizeof(float), d, myfile);
-//        fflush(myfile);
         index.emplace_back(idx);
         idx++;
     }
+
+    static inline std::vector<float> space_normalization_function(float* min, float* ptr, size_t dim, float delta) {
+        std::vector<float> tp;
+        tp.reserve(dim);
+        for (size_t i = 0; i<dim; i++) {
+            tp.emplace_back(ptr[i]-min[i]/delta);
+        }
+        return tp;
+    }
+
+    struct TransformationFunction {
+        std::vector<float> minP, maxP;
+        size_t d;
+        const double max_double;
+
+        TransformationFunction(size_t d) : minP(d, std::numeric_limits<float>::max()),
+                                           maxP(d, std::numeric_limits<float>::max()),
+                                           d(d),
+                                           max_double((double)std::numeric_limits<uint32_t>::max()/d) {}
+
+        std::vector<uint32_t> transform(const std::vector<float>& v) const {
+            std::vector<uint32_t> result;
+            result.reserve(d);
+            for (size_t i = 0; i<d; i++) {
+                result.emplace_back(((double )v[i]-(double)minP[i])/((double)maxP[i]-(double )minP[i])*max_double);
+            }
+            return result;
+        }
+
+        std::size_t hash(std::vector<uint32_t> const& vec) const {
+            // https://stackoverflow.com/a/12996028/1376095
+            // https://stackoverflow.com/a/72073933/1376095
+            std::size_t seed = vec.size();
+            for(auto x : vec) {
+                x = ((x >> 16) ^ x) * 0x45d9f3b;
+                x = ((x >> 16) ^ x) * 0x45d9f3b;
+                x = (x >> 16) ^ x;
+                seed ^= x + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+            }
+            return seed;
+        }
+
+        uint_fast64_t distance(const std::vector<uint32_t>&l, const std::vector<uint32_t>&r) const {
+            uint_fast64_t result = 0;
+            for (size_t i = 0; i<d; i++) {
+                if (l[i]>r[i]) {
+                    result+=(l[i]-r[i]);
+                } else {
+                    result+=(r[i]-l[i]);
+                }
+            }
+            return result;
+        }
+
+    };
 
     inline void restruct_index(DiskVP& b2) {
         if (start_to_write) {
@@ -190,6 +244,21 @@ struct DiskVP {
             auto idxFile = fopen(indexFN.c_str(), "w");
             for (size_t i = 0, N = size(); i<N; i++) {
                 fwrite(&indexMemory[i], sizeof(size_t), 1, idxFile);
+            }
+            if (!blockade_elements.empty()) {
+                std::vector<float> minP(d, std::numeric_limits<float>::max());
+                std::vector<float> maxP(d, std::numeric_limits<float>::max());
+//                std::vector<float> (d, std::numeric_limits<float>::max());
+
+                for (const auto& v : blockade_elements) {
+                    auto ptr = getSPTR(v.first);
+                    for (size_t j = 0; j<d; j++) {
+                        minP[j] = std::min(minP[j], ptr[j]);
+                        maxP[j] = std::max(maxP[j], ptr[j]);
+                        // TODO: finalise
+//                        ((double)maxP[j])-((double )minP[j])
+                    }
+                }
             }
             fclose(idxFile);
             b2.finaliseFile();
@@ -251,10 +320,19 @@ struct DiskVP {
         return pt;
     }
 
+    /**
+     * Computing the distance between elements of the dataset
+     * @param l
+     * @param r
+     * @return
+     */
     inline float distance(size_t l, size_t r) {
         return ker(d, getPTR(l), getPTR(r));
     }
 
+    /**
+     * Data structure for determining the distance across elements
+     */
     struct HeapItem {
         bool operator < (const HeapItem& other) const {
             return dist < other.dist;
@@ -264,45 +342,6 @@ struct DiskVP {
         float dist;
     };
 
-//    std::vector<size_t> found;
-//    std::priority_queue<HeapItem> heap_;
-//    size_t k = 0;
-
-//    inline std::vector<HeapItem> maxDistanceSearch(size_t id, double maxDistance = std::numeric_limits<double>::max()) {
-//        id = idxFile[id];
-//        heap_.clear();
-////        tau    = maxDistance;
-//        lookUpNearsetTo(0, getPTR(id), maxDistance);
-//        std::vector<HeapItem> results{heap_.begin(), heap_.end()};
-//        return results;
-//    }
-//
-//    inline std::vector<HeapItem> maxDistanceSearch(float* ptr, double maxDistance = std::numeric_limits<double>::max()) {
-//        heap_.clear();
-////        tau    = maxDistance;
-//        lookUpNearsetTo(0, ptr, maxDistance);
-//        std::vector<HeapItem> results{heap_.begin(), heap_.end()};
-//        return results;
-//    }
-//
-//    inline std::vector<HeapItem> topkSearchIdx(size_t id, size_t k=1) {
-//        this->k = k;
-//        id = idxFile[id];
-//        heap_.clear();
-//        tau    = std::numeric_limits<double>::max();
-//        lookUpNearsetTo(0, getPTR(id), maxDistance);
-//        std::vector<HeapItem> results{heap_.begin(), heap_.end()};
-//        return results;
-//    }
-//
-//    inline std::vector<HeapItem> topkSearch(float* ptr, size_t k=1) {
-//        this->k = k;
-//        heap_.clear();
-//        tau    = std::numeric_limits<double>::max();
-//        lookUpNearsetTo(0, ptr, maxDistance);
-//        std::vector<HeapItem> results{heap_.begin(), heap_.end()};
-//        return results;
-//    }
 
     struct TopKSearch {
         float* ptr;
@@ -393,7 +432,6 @@ struct DiskVP {
                 float dist = vp->ker(vp->d, (float*) vp->getPTR(top.first), ptr);
                 if (dist <= maxDistance)
                     heap_.emplace(HeapItem{root->id, dist});
-//                double maxDist = heap_.empty()  ? maxDepth : heap_.rbegin()->dist ;
 
                 if ((root->leftChild == std::numeric_limits<unsigned int>::max()) &&
                     (root->rightChild == std::numeric_limits<unsigned int>::max())) {
@@ -409,58 +447,6 @@ struct DiskVP {
             }
             return heap_;
         }
-
-
-
-//    while (heap_.size() > k) {
-//        auto it = heap_.end();
-//        it--;
-//        heap_.erase(it);
-//    }
-//    if (definitelyLessThan(dist,tau)) {
-//        heap_.push(HeapItem{root->id, dist});
-//        while (heap_.size() > k)
-//            heap_.pop();
-//
-//        if (heap_.size() == k)
-//            tau = heap_.top().dist;
-//    } else
-//        // Otherwise, if they are very similar, then I could add this other one too
-//    if (approximatelyEqual(dist, tau)) {
-//        heap_.push(HeapItem{root->id, dist});
-//        while (heap_.size() > k)
-//            heap_.pop();
-//
-//        if (heap_.size() == k)
-//            tau = heap_.top().dist;
-//        tau = std::min(heap_.top().dist, tau);
-//    }
-
-//    if(d + nndist[k-1] >= mu) {
-//        nn_query(vp, nd->ge, p, k, nn, nndist);
-//    }
-
-//    // Continuing with the traversal depending on the distance from the root
-//    if (dist < rootRadius) {
-//        if (root->leftChild != std::numeric_limits<unsigned int>::max() && dist - tau <= rootRadius) {
-//            lookUpNearsetTo(root->leftChild, id, depth+1);
-//        }
-//
-//        // At this stage, the tau value might be updated from the previous recursive call
-//        if (root->rightChild != std::numeric_limits<unsigned int>::max() && dist + tau >= rootRadius) {
-//            lookUpNearsetTo(root->rightChild, id, depth+1);
-//        }
-//    } else {
-//        if (root->rightChild != std::numeric_limits<unsigned int>::max() && dist + tau >= rootRadius) {
-//            lookUpNearsetTo(root->rightChild, id, depth+1);
-//        }
-//
-//        // At this stage, the tau value might be updated from the previous recursive call
-//        if (root->leftChild != std::numeric_limits<unsigned int>::max() && dist - tau <= rootRadius) {
-//            lookUpNearsetTo(root->leftChild, id, depth+1);
-//        }
-//    }
-
     };
 
 

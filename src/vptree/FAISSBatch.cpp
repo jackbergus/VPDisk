@@ -23,7 +23,7 @@
 // Created by giacomo on 31/03/24.
 //
 
-#include "../include/FAISSBatch.h"
+#include "vptree/FAISSBatch.h"
 
 #include <cstdlib>
 #include <string.h>
